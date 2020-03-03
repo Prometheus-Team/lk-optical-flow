@@ -46,6 +46,48 @@ class App:
 
     def run(self):
         while True:
+            _ret, frame = self.cam.read()   #read a frame from input
+            frame_gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)  #convert to grayscale
+            vis = frame.copy()  #save a copy of current frame
+
+            if len(self.tracks) > 0:    #Not running on the first iteration
+                img0, img1 = self.prev_gray, frame_gray
+                p0 = np.float32([tr[-1] for tr in self.tracks]).reshape(-1, 1, 2)
+
+                # Compare previous and current frame for optical flow
+                # Lukas Kanade step (check normal and reversed frame order)
+                p1, _st, _err = cv.calcOpticalFlowPyrLK(img0, img1, p0, None, **lk_params)
+                p0r, _st, _err = cv.calcOpticalFlowPyrLK(img1, img0, p1, None, **lk_params)
+                d = abs(p0-p0r).reshape(-1, 2).max(-1)
+                good = d < 1
+
+                new_tracks = []
+                for tr, (x, y), good_flag in zip(self.tracks, p1.reshape(-1, 2), good):
+                    if not good_flag:
+                        continue
+                    tr.append((x, y))
+                    if len(tr) > self.track_len:
+                        del tr[0]
+                    new_tracks.append(tr)
+                    cv.circle(vis, (x, y), 2, (0, 255, 0), -1)
+                self.tracks = new_tracks
+                cv.polylines(vis, [np.int32(tr) for tr in self.tracks], False, (0, 255, 0))
+                draw_str(vis, (20, 20), 'track count: %d' % len(self.tracks))
+
+            if self.frame_idx % self.detect_interval == 0:
+                mask = np.zeros_like(frame_gray)    #make a zero matrix with the frame's dimension
+                mask[:] = 255  #set everything to 255
+                for x, y in [np.int32(tr[-1]) for tr in self.tracks]:   #Take the last element of the last list from the bigger list (self.tracks)
+                    cv.circle(mask, (x, y), 5, 0, -1)   #Draw a circle
+                p = cv.goodFeaturesToTrack(frame_gray, mask=mask, **feature_params)  #Find good features in the frame (Corners)
+                if p is not None:       #If there are good features
+                    for x, y in np.float32(p).reshape(-1, 2):   #Reshape the array because it is nested in the beginning
+                        self.tracks.append([(x, y)])        #And append the positions to self.tracks
+
+
+            self.frame_idx += 1     #Frames processed count
+            self.prev_gray = frame_gray
+            cv.imshow('lk_track', vis)      #Show the copy of the colored image
 
             ch = cv.waitKey(1)
             if ch == 27:
